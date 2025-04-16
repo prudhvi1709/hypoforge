@@ -61,6 +61,21 @@
       <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#advancedSettings" aria-expanded="false" aria-controls="advancedSettings">
         Advanced Settings
       </button>
+      <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#tryYourOwn" aria-expanded="false" aria-controls="tryYourOwn">
+        Try Your Own
+      </button>
+    </div>
+
+    <div class="collapse mb-3" id="tryYourOwn">
+      <div class="row mb-3">
+        <div class="col-12 col-md-6 mx-auto">
+          <div class="card p-3">
+            <label for="file-upload" class="form-label fw-bold">Upload Your Data</label>
+            <input type="file" class="form-control" id="file-upload" accept=".csv,.sqlite,.sqlite3,.db,.s3db,.sl3">
+            <small class="form-text text-muted">Select a CSV or SQLite file to analyze</small>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="collapse mb-3" id="advancedSettings">

@@ -14,6 +14,7 @@ const $hypothesisPrompt = document.getElementById("hypothesis-prompt");
 const $synthesis = document.getElementById("synthesis");
 const $synthesisResult = document.getElementById("synthesis-result");
 const $status = document.getElementById("status");
+const $fileUpload = document.getElementById("file-upload");
 const loading = /* html */ `<div class="text-center my-5"><div class="spinner-border" role="status"></div></div>`;
 
 let data;
@@ -122,30 +123,117 @@ const testButton = (index) =>
   /* html */ `<button type="button" class="btn btn-sm btn-primary test-hypothesis" data-index="${index}">Test</button>`;
 
 // Add support for SQLite files
-async function loadData(demo) {
-  if (demo.href.match(/\.(sqlite3|sqlite|db|s3db|sl3)$/i)) {
-    // Load SQLite database
-    const response = await fetch(demo.href);
-    const buffer = await response.arrayBuffer();
-    const dbName = demo.href.split("/").pop();
-    await sqlite3.capi.sqlite3_js_posix_create_file(dbName, new Uint8Array(buffer));
-    // Copy tables from the uploaded database to a new DB instance
-    const uploadDB = new sqlite3.oo1.DB(dbName, "r");
-    const tables = uploadDB.exec("SELECT name FROM sqlite_master WHERE type='table'", { rowMode: "object" });
-    if (!tables.length) {
-      throw new Error("No tables found in database");
+async function loadData(source) {
+  // Handle file upload
+  if (source instanceof File) {
+    const fileName = source.name.toLowerCase();
+    if (fileName.match(/\.(sqlite3|sqlite|db|s3db|sl3)$/i)) {
+      // Load SQLite database from uploaded file
+      const buffer = await source.arrayBuffer();
+      const dbName = source.name;
+      await sqlite3.capi.sqlite3_js_posix_create_file(dbName, new Uint8Array(buffer));
+      // Copy tables from the uploaded database to a new DB instance
+      const uploadDB = new sqlite3.oo1.DB(dbName, "r");
+      const tables = uploadDB.exec("SELECT name FROM sqlite_master WHERE type='table'", { rowMode: "object" });
+      if (!tables.length) {
+        throw new Error("No tables found in database");
+      }
+      // Get data from the first table
+      const tableName = tables[0].name;
+      const result = uploadDB.exec(`SELECT * FROM "${tableName}"`, { rowMode: "object" });
+      // Clean up
+      uploadDB.close();
+      return result;
+    } else if (fileName.endsWith('.csv')) {
+      // Load CSV from uploaded file
+      const text = await source.text();
+      return d3.csvParse(text, d3.autoType);
+    } else {
+      throw new Error("Unsupported file format. Please upload a CSV or SQLite file.");
     }
-    // Get data from the first table
-    const tableName = tables[0].name;
-    const result = uploadDB.exec(`SELECT * FROM "${tableName}"`, { rowMode: "object" });
-    // Clean up
-    uploadDB.close();
-    return result;
-  } else {
-    // Load CSV as before
-    return d3.csv(demo.href, d3.autoType);
+  } else if (typeof source === 'object' && source.href) {
+    // Handle demo data
+    if (source.href.match(/\.(sqlite3|sqlite|db|s3db|sl3)$/i)) {
+      // Load SQLite database
+      const response = await fetch(source.href);
+      const buffer = await response.arrayBuffer();
+      const dbName = source.href.split("/").pop();
+      await sqlite3.capi.sqlite3_js_posix_create_file(dbName, new Uint8Array(buffer));
+      // Copy tables from the uploaded database to a new DB instance
+      const uploadDB = new sqlite3.oo1.DB(dbName, "r");
+      const tables = uploadDB.exec("SELECT name FROM sqlite_master WHERE type='table'", { rowMode: "object" });
+      if (!tables.length) {
+        throw new Error("No tables found in database");
+      }
+      // Get data from the first table
+      const tableName = tables[0].name;
+      const result = uploadDB.exec(`SELECT * FROM "${tableName}"`, { rowMode: "object" });
+      // Clean up
+      uploadDB.close();
+      return result;
+    } else {
+      // Load CSV as before
+      return d3.csv(source.href, d3.autoType);
+    }
   }
 }
+
+// Handle file upload - trigger automatically when file is selected
+$fileUpload.addEventListener("change", async () => {
+  if (!$fileUpload.files.length) {
+    return;
+  }
+
+  const file = $fileUpload.files[0];
+  $status.innerHTML = loading;
+  
+  try {
+    data = await loadData(file);
+    const columnDescription = Object.keys(data[0])
+      .map((col) => `- ${col}: ${describe(data, col)}`)
+      .join("\n");
+    const numColumns = Object.keys(data[0]).length;
+    description = `The Pandas DataFrame df has ${data.length} rows and ${numColumns} columns:\n${columnDescription}`;
+    
+    // Use a default prompt for uploaded files
+    const systemPrompt = $hypothesisPrompt.value = "You are an expert data analyst. Generate hypotheses that would be valuable to test on this dataset. Each hypothesis should be clear, specific, and testable.";
+    
+    const body = {
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: description },
+      ],
+      stream: true,
+      stream_options: { include_usage: true },
+      temperature: 0,
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "hypotheses", strict: true, schema: hypothesesSchema },
+      },
+    };
+
+    $hypotheses.innerHTML = loading;
+    for await (const { content } of asyncLLM("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}:hypoforge` },
+      body: JSON.stringify(body),
+    })) {
+      if (!content) continue;
+      ({ hypotheses } = parse(content));
+      drawHypotheses();
+    }
+    $synthesis.classList.remove("d-none");
+    // Clear the status spinner after processing completes
+    $status.innerHTML = "";
+  } catch (error) {
+    $status.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+    // Auto-clear error message after 5 seconds
+    setTimeout(() => {
+      $status.innerHTML = "";
+    }, 5000);
+  }
+});
 
 // When the user clicks on a demo, analyze it
 $demos.addEventListener("click", async (e) => {
@@ -154,39 +242,51 @@ $demos.addEventListener("click", async (e) => {
   if (!$demo) return;
 
   const demo = demos[+$demo.dataset.index];
-  data = await loadData(demo);
-  const columnDescription = Object.keys(data[0])
-    .map((col) => `- ${col}: ${describe(data, col)}`)
-    .join("\n");
-  const numColumns = Object.keys(data[0]).length;
-  description = `The Pandas DataFrame df has ${data.length} rows and ${numColumns} columns:\n${columnDescription}`;
-  const systemPrompt = $hypothesisPrompt.value = demo.audience;
-  const body = {
-    model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: description },
-    ],
-    stream: true,
-    stream_options: { include_usage: true },
-    temperature: 0,
-    response_format: {
-      type: "json_schema",
-      json_schema: { name: "hypotheses", strict: true, schema: hypothesesSchema },
-    },
-  };
+  $status.innerHTML = loading;
+  
+  try {
+    data = await loadData(demo);
+    const columnDescription = Object.keys(data[0])
+      .map((col) => `- ${col}: ${describe(data, col)}`)
+      .join("\n");
+    const numColumns = Object.keys(data[0]).length;
+    description = `The Pandas DataFrame df has ${data.length} rows and ${numColumns} columns:\n${columnDescription}`;
+    const systemPrompt = $hypothesisPrompt.value = demo.audience;
+    const body = {
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: description },
+      ],
+      stream: true,
+      stream_options: { include_usage: true },
+      temperature: 0,
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "hypotheses", strict: true, schema: hypothesesSchema },
+      },
+    };
 
-  $hypotheses.innerHTML = loading;
-  for await (const { content } of asyncLLM("https://llmfoundry.straive.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}:hypoforge` },
-    body: JSON.stringify(body),
-  })) {
-    if (!content) continue;
-    ({ hypotheses } = parse(content));
-    drawHypotheses();
+    $hypotheses.innerHTML = loading;
+    for await (const { content } of asyncLLM("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}:hypoforge` },
+      body: JSON.stringify(body),
+    })) {
+      if (!content) continue;
+      ({ hypotheses } = parse(content));
+      drawHypotheses();
+    }
+    $synthesis.classList.remove("d-none");
+    // Clear the status spinner after processing completes
+    $status.innerHTML = "";
+  } catch (error) {
+    $status.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
+    // Auto-clear error message after 5 seconds
+    setTimeout(() => {
+      $status.innerHTML = "";
+    }, 5000);
   }
-  $synthesis.classList.remove("d-none");
 });
 
 function drawHypotheses() {
