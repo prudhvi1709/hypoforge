@@ -5,6 +5,7 @@ import { Marked } from "https://cdn.jsdelivr.net/npm/marked@13/+esm";
 import hljs from "https://cdn.jsdelivr.net/npm/highlight.js@11/+esm";
 import { parse } from "https://cdn.jsdelivr.net/npm/partial-json@0.1.7/+esm";
 import sqlite3InitModule from "https://esm.sh/@sqlite.org/sqlite-wasm@3.46.1-build3";
+import { getProfile } from "https://aipipe.org/aipipe.js";
 
 const pyodideWorker = new Worker("./pyworker.js", { type: "module" });
 
@@ -55,12 +56,9 @@ $demos.innerHTML = demos
   .join("");
 
 // Ensure that the user is logged in
-const { token } = await fetch("https://llmfoundry.straive.com/token", {
-  credentials: "include",
-}).then((res) => res.json());
+const { token, email } = getProfile();
 if (!token) {
-  const url = "https://llmfoundry.straive.com/login?" + new URLSearchParams({ next: location.href });
-  $hypotheses.innerHTML = /* html */ `<div class="text-center my-5"><a class="btn btn-lg btn-primary" href="${url}">Log in to analyze</a></div>`;
+  window.location = `https://aipipe.org/login?redirect=${window.location.href}`;
   throw new Error("User is not logged in");
 }
 
@@ -199,7 +197,7 @@ $fileUpload.addEventListener("change", async () => {
     const systemPrompt = $hypothesisPrompt.value = "You are an expert data analyst. Generate hypotheses that would be valuable to test on this dataset. Each hypothesis should be clear, specific, and testable.";
     
     const body = {
-      model: "gpt-4o-mini",
+      model: "openai/gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: description },
@@ -209,14 +207,17 @@ $fileUpload.addEventListener("change", async () => {
       temperature: 0,
       response_format: {
         type: "json_schema",
-        json_schema: { name: "hypotheses", strict: true, schema: hypothesesSchema },
-      },
+        json_schema: {
+          name: "HypothesesResponse",
+          schema: hypothesesSchema
+        }
+      }
     };
 
     $hypotheses.innerHTML = loading;
-    for await (const { content } of asyncLLM("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+    for await (const { content } of asyncLLM("https://aipipe.org/openrouter/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}:hypoforge` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     })) {
       if (!content) continue;
@@ -253,7 +254,7 @@ $demos.addEventListener("click", async (e) => {
     description = `The Pandas DataFrame df has ${data.length} rows and ${numColumns} columns:\n${columnDescription}`;
     const systemPrompt = $hypothesisPrompt.value = demo.audience;
     const body = {
-      model: "gpt-4o-mini",
+      model: "openai/gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: description },
@@ -263,14 +264,17 @@ $demos.addEventListener("click", async (e) => {
       temperature: 0,
       response_format: {
         type: "json_schema",
-        json_schema: { name: "hypotheses", strict: true, schema: hypothesesSchema },
-      },
+        json_schema: {
+          name: "HypothesesResponse",
+          schema: hypothesesSchema
+        }
+      }
     };
 
     $hypotheses.innerHTML = loading;
-    for await (const { content } of asyncLLM("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+    for await (const { content } of asyncLLM("https://aipipe.org/openrouter/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}:hypoforge` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     })) {
       if (!content) continue;
@@ -319,7 +323,7 @@ $hypotheses.addEventListener("click", async (e) => {
 
   const systemPrompt = document.getElementById("analysis-prompt").value;
   const body = {
-    model: "gpt-4o-mini",
+    model: "openai/gpt-4o-mini",
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: `Hypothesis: ${hypothesis.hypothesis}\n\n${description}` },
@@ -333,9 +337,9 @@ $hypotheses.addEventListener("click", async (e) => {
   const $result = $resultContainer.querySelector(".result");
   const $outcome = $resultContainer.querySelector(".outcome");
   let generatedContent;
-  for await (const { content } of asyncLLM("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+  for await (const { content } of asyncLLM("https://aipipe.org/openrouter/v1/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}:hypoforge` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   })) {
     if (!content) continue;
@@ -360,7 +364,7 @@ $hypotheses.addEventListener("click", async (e) => {
     const [success, pValue] = result;
     $outcome.classList.add(pValue < 0.05 ? "success" : "failure");
     const body = {
-      model: "gpt-4o-mini",
+      model: "openai/gpt-4o-mini",
       messages: [
         {
           role: "system",
@@ -380,9 +384,9 @@ Do not mention the p-value but _interpret_ it to support the conclusion quantita
       stream_options: { include_usage: true },
       temperature: 0,
     };
-    for await (const { content } of asyncLLM("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+    for await (const { content } of asyncLLM("https://aipipe.org/openrouter/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}:hypoforge` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     })) {
       if (!content) continue;
@@ -415,7 +419,7 @@ document.querySelector("#synthesize").addEventListener("click", async (e) => {
     .filter((d) => d.outcome);
 
   const body = {
-    model: "gpt-4o-mini",
+    model: "openai/gpt-4o-mini",
     messages: [
       {
         role: "system",
@@ -442,9 +446,9 @@ Finally, after a break (---) add a 1-paragraph executive summary section (H5) su
   };
 
   $synthesisResult.innerHTML = loading;
-  for await (const { content } of asyncLLM("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+  for await (const { content } of asyncLLM("https://aipipe.org/openrouter/v1/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}:hypoforge` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
   })) {
     if (!content) continue;
